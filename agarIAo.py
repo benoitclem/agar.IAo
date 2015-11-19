@@ -9,6 +9,7 @@ import pygame
 import pygame.gfxdraw
 import sys
 from threading import RLock
+import math
 
 red = (255,0,0)
 green = (0,255,0)
@@ -73,7 +74,6 @@ class Cell:
         self.color = tuple(map(lambda rgb: rgb / 255.0, color))
         self.is_virus = is_virus
         self.is_agitated = is_agitated
-		
     @property
     def is_food(self):
         return self.size < 20 and not self.name
@@ -144,7 +144,7 @@ class Player:
 
 	def reset(self):
 		self.own_ids.clear()
-		self.nick = 'bot'
+		self.nick = 'agarIAo'
 		self.center = self.world.center
 		self.cells_changed()
 
@@ -324,6 +324,11 @@ class agarioClient:
 		parser = getattr(self, 'parse_%s' % packet_name)
 		try:
 			parser(buf)
+		except:
+			print("fuck");
+			self.player.world.cellsMutex.release()
+			return True
+		"""
 		except BufferUnderflowError as e:
 			m = 'Parsing %s packet failed: %s' % (packet_name, e.args[0])
 			self.onError("Message",m)
@@ -333,6 +338,7 @@ class agarioClient:
 			#self.onError("Message",m)
 			#print(":".join("{:02x}".format(ord(c)) for c in msg))
 			#self.onError("DUMP",msg)
+		"""
 		return True
 			
 	def onError(self, what, msg):
@@ -421,7 +427,7 @@ class agarioClient:
 				for i in range(buf.pop_uint32()):
 					buf.pop_uint8()
 			if bitmask & 4:  # skin URL
-				print(":".join("{:02x}".format(ord(c)) for c in buf.save))
+				#print(":".join("{:02x}".format(ord(c)) for c in buf.save))
 				skin_url = buf.pop_str8()
 				if skin_url[0] is not ':':
 					skin_url = ''
@@ -600,27 +606,58 @@ class SubscriberMock(object):
 class Visualization:
 	def __init__(self,player):
 		self.screen = pygame.display.set_mode((1900/2,1080/2))
-		self.myfont = pygame.font.SysFont("monospace", 15)
+		self.fontSize = 15
+		self.myfont = pygame.font.SysFont("monospace", self.fontSize)
 		self.player = player
 		
-	def drawCells(self, cells,mutex):
+	def drawScore(self):
+		ps = self.player.total_size
+		pm = self.player.total_mass
+		
+		pygame.draw.rect(self.screen,(128,128,128),((0,1080/2-self.fontSize),(150,self.fontSize)))
+		label = self.myfont.render("%d - %d" %(ps,pm), 2, black)
+		self.screen.blit(label, (0,1080/2-self.fontSize))
+		
+		
+	def drawCells(self, cells):
 		self.screen.fill(gray)
-		mutex.acquire()
 		for key in cells:
 			c = cells[key]
 			normColor = tuple(int(255*x) for x in c.color)
 			cCenter = (int(c.pos[0]/2-self.player.center[0]/2+1900/4),int(c.pos[1]/2-self.player.center[1]/2+1080/4))
 			if(c.size>0):
-				pygame.draw.circle(self.screen, normColor, cCenter, c.size/2)
-				#print(normColor, cCenter, int(c.size/2), 3)
-				#pygame.gfxdraw.circle(self.screen, normColor, cCenter, int(c.size/2), 3)
-				if not c.is_food and not c.is_ejected_mass:
-					label = self.myfont.render(c.name, 2, black)
-					self.screen.blit(label, cCenter)
+				if c.is_virus:
+					n = 26.0
+					angle = (2.0*math.pi)/n
+					dSize = 10
+					lastXY = (((c.size/2) + dSize/2) * math.cos(0), ((c.size/2) + dSize/2) * math.sin(0))
+					lastXY = (lastXY[0]+cCenter[0],lastXY[1]+cCenter[1])
+					for i in range(1,int(n+2)):
+						newXY = ()
+						if (i%2)==0:
+							newXY = (\
+									((c.size/2) + (dSize/2)) * math.cos(i*angle),\
+									((c.size/2) + (dSize/2)) * math.sin(i*angle)\
+									)
+						else:
+							newXY = (\
+									((c.size/2) - (dSize/2)) * math.cos(i*angle),\
+									((c.size/2) - (dSize/2)) * math.sin(i*angle)\
+									)
+						newXY = (newXY[0]+cCenter[0],newXY[1]+cCenter[1])
+						pygame.draw.line(self.screen,normColor,newXY,lastXY)
+						#newXY = (newXY[0]+cCenter[0],newXY[1]+cCenter[1])
+						#lastXY = (lastXY[0]+cCenter[0],lastXY[1]+cCenter[1])
+						#pygame.draw.line(self.screen, normColor, newXY,lastXY)
+						lastXY = newXY
+				else:
+					pygame.draw.circle(self.screen, normColor, cCenter, c.size/2)
+					if not c.is_food and not c.is_ejected_mass:
+						label = self.myfont.render(c.name, 2, black)
+						self.screen.blit(label, cCenter)
 			else:
-				print("Wrong size?")
-		mutex.release()
-		self.commit()
+				pass
+				#print("Wrong size?")
 		
 	def commit(self):
 		pygame.display.update()
@@ -637,21 +674,26 @@ if __name__ == "__main__":
 		t1 = threading.Thread(target=c.listen)
 		t1.start()
 		quit = False
-		
+		i = 0
+		j = 0
+		dt = 0.05
 		while not quit:
-			
+			print("0")
 			# Quit?
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					print("got event quit")
 					quit = True
 					break
-					
+			print("1")		
 			# Keyboard
+
 			pressed = pygame.key.get_pressed()
    			if pressed[pygame.K_r]:
    				print("respawn")
    				c.sendRespawn()
+   			print("2")
+   			"""
    			elif pressed[pygame.K_z]:
    				print("up")
    				c.sendTarget(c.player.center[0],c.player.center[1]-20)
@@ -664,10 +706,32 @@ if __name__ == "__main__":
 			elif pressed[pygame.K_d]:
    				print("right")
    				c.sendTarget(c.player.center[0]+20,c.player.center[1])
+   			"""
+   			print("3")
+   			x = 30*math.sin(i)
+   			y = 30*math.cos(i)
+   			i+=dt
+   			c.sendTarget(c.player.center[0]+x,c.player.center[1]+y)
+   			print("4")
+   			food = {}
+   			enemy = {}
    				
-   				
-			sleep(0.1)
-			v.drawCells(c.player.world.cells,c.player.world.cellsMutex)
+			sleep(0.01)
+			if j%100 == 0:
+				print("alive")
+			print("5")
+			j += 1
+			c.player.world.cellsMutex.acquire()
+			v.drawCells(c.player.world.cells)
+			v.drawScore()
+			"""
+			c.player.world.cells
+			c.player.center
+			"""
+			v.commit()
+			print("6")
+			c.player.world.cellsMutex.release()
+			print("7")
 			#print(c.player.world.leaderboard_names)
 			"""print("==============================")
 			for key in c.world.cells:
