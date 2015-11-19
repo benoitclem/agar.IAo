@@ -483,7 +483,7 @@ class agarioClient:
 		self.player.world.leaderboard_groups = leaderboard_groups
 
 	def parse_own_id(self, buf):  # new cell ID, respawned or split
-		print("own_id")
+		#print("own_id")
 		cid = buf.pop_uint32()
 		if not self.player.is_alive:  # respawned
 		    self.player.own_ids.clear()
@@ -661,6 +661,17 @@ class Visualization:
 		
 	def commit(self):
 		pygame.display.update()
+		
+def sortCellLists(l):
+	lcopy = []
+	lenl = len(l)
+	for i in range(lenl):
+		c = None
+		d = 99999999
+		for (distance,dxdy,sz) in l:
+			if d<distance:
+				c = (distance,dxdy,sz)
+		l.
 
 if __name__ == "__main__":
 	import threading
@@ -678,21 +689,24 @@ if __name__ == "__main__":
 		j = 0
 		dt = 0.05
 		while not quit:
-			print("0")
+			#print("0")
 			# Quit?
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					print("got event quit")
 					quit = True
 					break
-			print("1")		
+			#print("1")		
 			# Keyboard
 
 			pressed = pygame.key.get_pressed()
    			if pressed[pygame.K_r]:
    				print("respawn")
    				c.sendRespawn()
-   			print("2")
+   			if pressed[pygame.K_q]:
+   				print("quit")
+   				quit = True
+   			#print("2")
    			"""
    			elif pressed[pygame.K_z]:
    				print("up")
@@ -707,31 +721,64 @@ if __name__ == "__main__":
    				print("right")
    				c.sendTarget(c.player.center[0]+20,c.player.center[1])
    			"""
-   			print("3")
-   			x = 30*math.sin(i)
+   			#print("3")
+   			x = 30*math.sin(i)+2
    			y = 30*math.cos(i)
    			i+=dt
    			c.sendTarget(c.player.center[0]+x,c.player.center[1]+y)
-   			print("4")
+   			#print("4")
    			food = {}
    			enemy = {}
    				
 			sleep(0.01)
 			if j%100 == 0:
 				print("alive")
-			print("5")
+			#print("5")
 			j += 1
 			c.player.world.cellsMutex.acquire()
 			v.drawCells(c.player.world.cells)
 			v.drawScore()
-			"""
-			c.player.world.cells
-			c.player.center
-			"""
+			
+			# compute neural network features
+			food = []
+			em = []
+			enemy = []
+			virus = []
+			center = c.player.center
+			mass = c.player.total_mass
+			if(center[0]) != 0 and (center[1] != 0) and (mass != 0):
+				for key in c.player.world.cells:
+					cell = c.player.world.cells[key]
+					dx = 0
+					dy = 0
+					if center[0] > cell.pos[0]:
+						dx = center[0]-cell.pos[0]
+					else:
+						dx = cell.pos[0]-center[0]
+					if center[1] > cell.pos[1]:
+						dy = center[1]-cell.pos[1]
+					else:
+						dy = cell.pos[1]-center[1]
+					dxdy = (dx,dy)
+					distance = math.sqrt(abs(dx)**2 + abs(dy)**2)
+					if cell.is_food:
+						food.append((distance,dxdy,cell.size))
+					if cell.is_ejected_mass:
+						em.append((distance,dxdy,cell.size))
+					if cell.is_virus:
+						virus.append((distance,dxdy,cell.size))
+					elif distance != 0:
+						enemy.append((distance,dxdy,cell.size))
+			
+			print("food",food)
+			print("enemy",enemy)
+			print("virus",virus)
+			print("em",em)
+			
 			v.commit()
-			print("6")
+			#print("6")
 			c.player.world.cellsMutex.release()
-			print("7")
+			#print("7")
 			#print(c.player.world.leaderboard_names)
 			"""print("==============================")
 			for key in c.world.cells:
