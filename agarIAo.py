@@ -14,11 +14,15 @@ import math
 red = (255,0,0)
 green = (0,255,0)
 blue = (0,0,255)
+yellow = (255,255,0)
+cian = (0,255,255)
 darkBlue = (0,0,128)
 white = (255,255,255)
 black = (0,0,0)
 pink = (255,200,200)
 gray = (100,100,100)
+
+featuresColors = [green,red,yellow,cian]
 
 packet_s2c = {
     16: 'world_update',
@@ -300,7 +304,6 @@ class agarioClient:
 	#====================	
 		
 	def onMessage(self):
-		#print("onMessage")
 		## Receive Msg
 		try:
 			msg = self.ws.recv()
@@ -584,31 +587,15 @@ class agarioClient:
 		self.sendStruct('<B', 20)
 		self.onDeath()
 		
-class SubscriberMock(object):
-    def __init__(self):
-        self.events = []
-        self.data = []
-
-    def reset(self):
-        self.events.clear()
-        self.data.clear()
-
-    def __getattr__(self, item):
-    	
-        assert item[:3] == 'on_', str(item)
-        assert 'error' not in item, 'Error event emitted'
-        event = item[3:]
-        data = {}
-        self.events.append(event)
-        self.data.append(data)
-        return lambda **d: data.update(d)
-        
 class Visualization:
 	def __init__(self,player):
 		self.screen = pygame.display.set_mode((1900/2,1080/2))
 		self.fontSize = 15
 		self.myfont = pygame.font.SysFont("monospace", self.fontSize)
 		self.player = player
+		
+	def drawBackGround(self):
+		self.screen.fill(gray)
 		
 	def drawScore(self):
 		ps = self.player.total_size
@@ -618,9 +605,28 @@ class Visualization:
 		label = self.myfont.render("%d - %d" %(ps,pm), 2, black)
 		self.screen.blit(label, (0,1080/2-self.fontSize))
 		
+	def drawDirection(self,dxdy):
+		cCenter = (1900/4,1080/4)
+		d = (1900/4+dxdy[0],1080/4+dxdy[1])
+		pygame.draw.line(self.screen,white,cCenter,d)
+		
+	def drawFeatures(self, cells, colors):
+		center = self.player.center
+		i = 0
+		for c in cells:
+			for f in c:
+				print(f)
+				x = f[1][0]/2 + 1900/4
+				y = f[1][1]/2 + 1080/4
+				s = f[2]/2
+				print(center)
+				print(x,y,s)
+				lines = [(x-s,y-s),(x+s,y-s),(x+s,y+s),(x-s,y+s)]
+				pygame.draw.lines(self.screen, colors[i], True, lines, 2 )
+			i+=1
 		
 	def drawCells(self, cells):
-		self.screen.fill(gray)
+		
 		for key in cells:
 			c = cells[key]
 			normColor = tuple(int(255*x) for x in c.color)
@@ -662,17 +668,161 @@ class Visualization:
 	def commit(self):
 		pygame.display.update()
 		
-def sortCellLists(l):
-	lcopy = []
-	lenl = len(l)
-	for i in range(lenl):
-		c = None
-		d = 99999999
-		for (distance,dxdy,sz) in l:
-			if d<distance:
-				c = (distance,dxdy,sz)
-		l.
+def computeFeatures(player):
 
+	# compute neural network features
+	food = []
+	em = []
+	enemy = []
+	virus = []
+	center = player.center
+	mass = player.total_mass
+	if(center[0]) != 0 and (center[1] != 0) and (mass != 0):
+		for key in player.world.cells:
+			cell = player.world.cells[key]
+			dx = 0
+			dy = 0
+		
+			# don't care about absolute value, create a tmp 
+			# variable that is shifted.					
+			dCenter = (center[0] + 10000, center[1] + 10000)
+			dCellPos = (cell.pos[0] + 10000, cell.pos[1] + 10000)
+				
+			dx = -(dCenter[0]-dCellPos[0])
+			dy = -(dCenter[1]-dCellPos[1])	
+		
+			dxdy = (dx,dy)
+			distance = math.sqrt(abs(dx)**2 + abs(dy)**2)
+			if cell.is_food:
+				food.append((distance,dxdy,cell.size))
+			elif cell.is_ejected_mass:
+				em.append((distance,dxdy,cell.size))
+			elif cell.is_virus:
+				virus.append((distance,dxdy,cell.size))
+			elif distance != 0:
+				enemy.append((distance,dxdy,cell.size))
+
+	# sort data
+	food = sorted(food)
+	enemy = sorted(enemy)
+	virus = sorted(virus)
+	em = sorted(em)
+
+	m = 0
+	if len(food) != 0:
+		if len(food) > 3:
+			m = 3
+		else:
+			m = len(food)
+		food = food[:m]
+	if len(enemy) != 0:
+		if len(enemy) > 3:
+			m = 3
+		else:
+			m = len(enemy)
+		enemy = enemy[:m]
+	if len(virus) != 0:
+		if len(virus) > 3:
+			m = 3
+		else:
+			m = len(virus)
+		virus = virus[:m]
+	if len(em) != 0:
+		if len(em) > 3:
+			m = 3
+		else:
+			m = len(em)
+		em = em[:m]
+	
+	'''
+	print("food",food)
+	print("enemy",enemy)
+	print("virus",virus)
+	print("em",em)
+	'''
+
+	return [food,enemy,virus,em]
+
+class SubscriberMock(object):
+	def __init__(self):
+		self.events = []
+		self.data = []
+		self.v = None
+		self.c = None
+		self.dead = True
+	
+	def setAgarIOClient(self,client):
+		self.c = client
+	
+	def setVisualisation(self,vis):
+		self.v = vis
+	
+	def reset(self):
+		self.events.clear()
+		self.data.clear()
+        
+	def __getattr__(self, item):
+		if str(item) == "on_death":
+			print("DEAD")
+			self.dead = True
+		assert item[:3] == 'on_', str(item)
+		assert 'error' not in item, 'Error event emitted'
+		event = item[3:]
+		data = {}
+		self.events.append(event)
+		self.data.append(data)
+		return lambda **d: data.update(d)
+
+	"""
+	def __getattr__(self, item):
+		if str(item) == "on_death":
+			print("DEAD")
+			self.dead = True
+		assert item[:3] == 'on_', 'Requested non-event handler from subscriber'
+		assert 'error' not in item, 'Error event emitted'
+		event = item[3:]
+		data = {}
+		self.events.append(event)
+		self.data.append(data)
+		return lambda **d: data.update(d)
+	"""
+        
+	def run(self,chromosome):
+		self.dead = False
+		self.c.sendRespawn()
+		i = 0
+		dt = 0.05
+		while not self.dead:
+			
+			self.c.player.world.cellsMutex.acquire()
+	
+			features = computeFeatures(self.c.player)
+			
+			self.v.drawBackGround()
+			self.v.drawCells(c.player.world.cells)
+			self.v.drawFeatures(features,featuresColors)
+			self.v.drawScore()
+			
+			self.v.commit()
+			
+			self.c.player.world.cellsMutex.release()
+			
+			if self.c.player.total_mass != 0:
+				# Take decision on direction
+				x = 30*math.sin(i*dt)+2
+	   			y = 30*math.cos(i*dt)
+	   			self.c.sendTarget(c.player.center[0]+x,c.player.center[1]+y)
+	   			
+	   			self.v.drawDirection((x,y))
+	   			self.v.commit()
+   				
+			if i%100 == 0:
+				print("alive")
+			#print("5")
+			i += 1
+			sleep(0.01)
+			         
+"""
 if __name__ == "__main__":
 	import threading
 	pygame.init()
@@ -681,24 +831,42 @@ if __name__ == "__main__":
 	s = c.findServer()
 	print(s)
 	if c.connect(s[0],s[1]):
+	
+	else:
+		print("Could not connect")
+	
+"""
+if __name__ == "__main__":
+	import threading
+	pygame.init()
+	p = SubscriberMock()
+	c = agarioClient(p)
+	v = Visualization(c.player)
+	
+	p.setAgarIOClient(c)
+	p.setVisualisation(v)
+	
+	s = c.findServer()
+	print(s)
+	if c.connect(s[0],s[1]):
 		print("Client connected")
 		t1 = threading.Thread(target=c.listen)
 		t1.start()
+		
+		for i in range(5):
+			sleep(2)
+			print(i,"iteration")
+			p.run(None)
+		"""
 		quit = False
-		i = 0
-		j = 0
-		dt = 0.05
 		while not quit:
-			#print("0")
 			# Quit?
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					print("got event quit")
 					quit = True
 					break
-			#print("1")		
 			# Keyboard
-
 			pressed = pygame.key.get_pressed()
    			if pressed[pygame.K_r]:
    				print("respawn")
@@ -706,95 +874,14 @@ if __name__ == "__main__":
    			if pressed[pygame.K_q]:
    				print("quit")
    				quit = True
-   			#print("2")
-   			"""
-   			elif pressed[pygame.K_z]:
-   				print("up")
-   				c.sendTarget(c.player.center[0],c.player.center[1]-20)
-   			elif pressed[pygame.K_s]:
-   				print("down")
-   				c.sendTarget(c.player.center[0],c.player.center[1]+20)
-			elif pressed[pygame.K_q]:
-   				print("left")
-   				c.sendTarget(c.player.center[0]-20,c.player.center[1])
-			elif pressed[pygame.K_d]:
-   				print("right")
-   				c.sendTarget(c.player.center[0]+20,c.player.center[1])
-   			"""
-   			#print("3")
-   			x = 30*math.sin(i)+2
-   			y = 30*math.cos(i)
-   			i+=dt
-   			c.sendTarget(c.player.center[0]+x,c.player.center[1]+y)
-   			#print("4")
-   			food = {}
-   			enemy = {}
-   				
-			sleep(0.01)
-			if j%100 == 0:
-				print("alive")
-			#print("5")
-			j += 1
-			c.player.world.cellsMutex.acquire()
-			v.drawCells(c.player.world.cells)
-			v.drawScore()
+		"""
 			
-			# compute neural network features
-			food = []
-			em = []
-			enemy = []
-			virus = []
-			center = c.player.center
-			mass = c.player.total_mass
-			if(center[0]) != 0 and (center[1] != 0) and (mass != 0):
-				for key in c.player.world.cells:
-					cell = c.player.world.cells[key]
-					dx = 0
-					dy = 0
-					if center[0] > cell.pos[0]:
-						dx = center[0]-cell.pos[0]
-					else:
-						dx = cell.pos[0]-center[0]
-					if center[1] > cell.pos[1]:
-						dy = center[1]-cell.pos[1]
-					else:
-						dy = cell.pos[1]-center[1]
-					dxdy = (dx,dy)
-					distance = math.sqrt(abs(dx)**2 + abs(dy)**2)
-					if cell.is_food:
-						food.append((distance,dxdy,cell.size))
-					if cell.is_ejected_mass:
-						em.append((distance,dxdy,cell.size))
-					if cell.is_virus:
-						virus.append((distance,dxdy,cell.size))
-					elif distance != 0:
-						enemy.append((distance,dxdy,cell.size))
 			
-			print("food",food)
-			print("enemy",enemy)
-			print("virus",virus)
-			print("em",em)
-			
-			v.commit()
-			#print("6")
-			c.player.world.cellsMutex.release()
-			#print("7")
-			#print(c.player.world.leaderboard_names)
-			"""print("==============================")
-			for key in c.world.cells:
-				ccell = c.world.cells[key]
-				if ccell.is_food:
-					n = "food"
-				elif ccell.is_ejected_mass:
-					n = "mass"
-				else:
-					n = ccell.name	
-				print(n,key,ccell.pos[0],ccell.pos[1])
-			"""	
 		c.running = False
 		t1.join()
 		pygame.quit()
 		sys.exit()
 	else:
 		print("Could not connect")
+#"""
 
