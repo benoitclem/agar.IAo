@@ -1,6 +1,8 @@
 #! /usr/bin/python2.7
 # -*- coding: utf-8 -*-
 
+import os
+import threading
 import urllib2
 import websocket
 import struct
@@ -10,6 +12,11 @@ import pygame.gfxdraw
 import sys
 from threading import RLock
 import math
+import matplotlib.pyplot as plt
+
+from neat import population, visualize
+from neat.config import Config
+from neat.nn import nn_pure as nn
 
 red = (255,0,0)
 green = (0,255,0)
@@ -409,7 +416,7 @@ class agarioClient:
 					# do not clear all cells yet, they still get updated
 				self.player.own_ids.remove(cb)
 			if cb in cells:
-				print('delete',cb,cells[cb].pos[0],cells[cb].pos[1])
+				#print('delete',cb,cells[cb].pos[0],cells[cb].pos[1])
 				self.gameCallback.on_cell_removed(cid=cb)
 				del cells[cb]
 
@@ -615,12 +622,12 @@ class Visualization:
 		i = 0
 		for c in cells:
 			for f in c:
-				print(f)
+				#print(f)
 				x = f[1][0]/2 + 1900/4
 				y = f[1][1]/2 + 1080/4
 				s = f[2]/2
-				print(center)
-				print(x,y,s)
+				#print(center)
+				#print(x,y,s)
 				lines = [(x-s,y-s),(x+s,y-s),(x+s,y+s),(x-s,y+s)]
 				pygame.draw.lines(self.screen, colors[i], True, lines, 2 )
 			i+=1
@@ -786,14 +793,41 @@ class SubscriberMock(object):
 		self.data.append(data)
 		return lambda **d: data.update(d)
 	"""
+	def evalFitness(self,genomes):
+		print("evalFitness")
+		for g in genomes:
+			net = nn.create_phenotype(g)
+			#net = nn.create_fast_feedforward_phenotype(g)
+			g.fitness = self.run(net)
+			print(g.fitness)
+			
+			"""
+			error = 0.0
+			for i, inputs in enumerate(INPUTS):
+				# Serial activation propagates the inputs through the entire network.
+				output = net.sactivate(inputs)
+				error += (output[0] - OUTPUTS[i]) ** 2
+
+			g.fitness = 1 - math.sqrt(error / len(OUTPUTS))
+			"""
         
-	def run(self,chromosome):
+	def run(self, net):
 		self.dead = False
+		sleep(2);
 		self.c.sendRespawn()
 		i = 0
 		dt = 0.05
-		while not self.dead:
-			
+		
+		self.lifeTime = 0
+		self.mass = []
+		self.size = []
+		self.diffMass = []
+		
+		self.lastCenter = (0,0)
+		malus = 0
+		
+		while (not self.dead) and (not quit):
+		
 			self.c.player.world.cellsMutex.acquire()
 	
 			features = computeFeatures(self.c.player)
@@ -807,20 +841,75 @@ class SubscriberMock(object):
 			
 			self.c.player.world.cellsMutex.release()
 			
+			self.lifeTime += 1;
+			self.mass.append(self.c.player.total_mass)
+			self.size.append(self.c.player.total_size)
+			if len(self.mass) >= 3:
+				if self.mass[-1] != self.mass[-2]:
+					self.diffMass.append(self.mass[-1] - self.mass[-2])
+					
+			inputs = []
+			
+			for group in features:
+				for cell in group:
+					inputs.append(cell[0])
+					inputs.append(cell[1][0])
+					inputs.append(cell[1][1])
+					inputs.append(cell[2])
+				if len(group) < 3:
+					for j in range(4*(3-len(group))):
+						if j%4 == 0:
+							inputs.append(99999)
+						else:
+							inputs.append(0)
+					
+			inputs.append(self.c.player.total_mass)
+			
+			if self.lastCenter[0] == c.player.center[0]:
+				malus += 0.1
+			if self.lastCenter[1] == c.player.center[1]:
+				malus += 0.1
+				
+			#print(len(inputs))
+			#print(inputs)
+			
+			output = net.sactivate(inputs)
+			print(output)
+			
+			#Apply neural network output
+			self.c.sendTarget(c.player.center[0]+50*(output[0]-0.5),c.player.center[1]+50*(output[1]-0.5))
+			if output[2]>0.5:
+				self.c.sendSplit()
+			if output[3]>0.5:
+				self.c.sendShoot()
+			
+			"""
 			if self.c.player.total_mass != 0:
 				# Take decision on direction
-				x = 30*math.sin(i*dt)+2
+				x = 30*math.sin(i*dt)+20
 	   			y = 30*math.cos(i*dt)
 	   			self.c.sendTarget(c.player.center[0]+x,c.player.center[1]+y)
 	   			
 	   			self.v.drawDirection((x,y))
 	   			self.v.commit()
+	   		"""
    				
 			if i%100 == 0:
 				print("alive")
 			#print("5")
 			i += 1
 			sleep(0.01)
+		
+		"""
+		t = range(self.lifeTime)
+		plt.plot(t, self.mass)
+		plt.show()
+		"""
+		
+		fitness = sum(self.diffMass) - malus
+		if fitness < 0:
+			fitness = 0
+		return fitness
 			         
 """
 if __name__ == "__main__":
@@ -837,7 +926,11 @@ if __name__ == "__main__":
 	
 """
 if __name__ == "__main__":
-	import threading
+	
+	# Open config File
+	local_dir = os.path.dirname(__file__)
+	config = Config(os.path.join(local_dir, 'agarIAo_config'))
+
 	pygame.init()
 	p = SubscriberMock()
 	c = agarioClient(p)
@@ -846,17 +939,33 @@ if __name__ == "__main__":
 	p.setAgarIOClient(c)
 	p.setVisualisation(v)
 	
+	quit = False
+	
 	s = c.findServer()
 	print(s)
 	if c.connect(s[0],s[1]):
 		print("Client connected")
 		t1 = threading.Thread(target=c.listen)
 		t1.start()
+
+		pop = population.Population(config)
+		pop.epoch(p.evalFitness, 200,checkpoint_interval = 1)
 		
-		for i in range(5):
+		"""
+		i = 0
+		while not quit:
 			sleep(2)
 			print(i,"iteration")
-			p.run(None)
+			i+=1
+			f = p.run(None)
+			print("fitness for this run  %s" %f)
+			for event in pygame.event.get():
+				if event.type == pygame.QUIT:
+					print("got event quit")
+					quit = True
+					break
+		"""
+			
 		"""
 		quit = False
 		while not quit:
